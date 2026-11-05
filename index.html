@@ -1454,15 +1454,35 @@ function wvDialog(){
 function mtCmds(ans, k){ termInit(ans); const h = (ans.hist[k] || []).slice(); const cur = (ans.cur[k] || "").trim(); if(cur) h.push(cur); return h; }
 function termInit(ans){ if(!ans.hist) ans.hist = {}; if(!ans.cur) ans.cur = {}; if(ans.step == null) ans.step = 0; }
 /* The scored command: whatever is still typed at the prompt, otherwise the last command entered. */
-function termLast(ans, k){ termInit(ans); const cur = (ans.cur[k] || "").trim(); if(cur) return cur; const h = (ans.hist[k] || []).filter(x => x); return h.length ? h[h.length-1] : ""; }
+function termLast(ans, k){ termInit(ans); const cur = (ans.cur[k] || "").trim(); if(cur) return cur; const h = (ans.hist[k] || []).filter(x => x && !SIM_YN_RE.test(x.trim())); return h.length ? h[h.length-1] : ""; }
 function termTranscript(ans, k, prompt){
   let out = "Microsoft Windows [Version 10.0.22631.4317]\n(c) Microsoft Corporation. All rights reserved.\n\n";
+  let last = "";
   (ans.hist[k] || []).forEach(cmd => {
+    const yn = simYN(last, cmd);
+    if(yn !== null){ out = simYNAppend(out, cmd, yn); last = yn; return; }
     const r = cmd ? simOut(cmd, prompt) : "";
+    last = r;
     if(r === "\f"){ out = ""; return; }
     out += prompt + cmd + "\n" + (r ? r + "\n" : "") + (cmd ? "\n" : "");
   });
   return `<div class="wt-out">${esc(out)}</div>`;
+}
+/* Answering a (Y/N) question: when the previous output ended by asking Y/N, a typed Y, N, yes, or no answers it
+   instead of being run as a new command. The answer is shown on the question's line, as in Command Prompt. */
+const SIM_YN_RE = /^(y|n|yes|no)$/i;
+function simYN(prev, raw){
+  const c = String(raw || "").trim();
+  if(!SIM_YN_RE.test(c) || !/\(Y\/N\)\??(\n\[[^\n]*\])?\s*$/.test(prev || "")) return null;
+  const yes = c[0].toLowerCase() === "y";
+  if(/schedule this volume/.test(prev)) return yes ? "This volume will be checked the next time the system restarts." : "";
+  if(/Proceed with Format/.test(prev)) return yes ? "Formatting...\nCreating file system structures.\nFormat complete." : "";
+  return "";
+}
+function simYNAppend(out, raw, reply){
+  const m = /\(Y\/N\)\??\n\n$/.test(out);
+  out = m ? out.replace(/\n\n$/, " ") : out.replace(/\n\n$/, "\n");
+  return out + raw.trim() + "\n" + (reply ? reply + "\n" : "") + "\n";
 }
 function cmdMsg(raw){
   const c = normCmd(raw); if(!c) return "";
@@ -2548,17 +2568,20 @@ function mtScn(k){ return MT_SCENARIOS.find(x => x.k === k); }
 function mtText(scn, v){ return typeof scn.s === "function" ? scn.s(v) : scn.s; }
 function mtReplay(scn, v, cmds){
   const st = scn.init(v), log = [];
-  let out = MT_BANNER, winver = false;
+  let out = MT_BANNER, winver = false, last = "";
   cmds.forEach((raw, i) => {
     const prompt = st.mode === "dp" ? "DISKPART> " : scn.prompt;
     const c = normCmd(raw);
     winver = false;
     if(!c){ out += prompt + "\n"; return; }
+    const yn = st.mode === "dp" ? null : simYN(last, raw);
+    if(yn !== null){ out = simYNAppend(out, raw, yn); last = yn; return; }
     let r = scn.run(c, raw, st, log, v);
     if(r === null || r === undefined){
       if(st.mode === "dp") r = "";
       else r = simOut(raw, scn.prompt);
     }
+    last = r;
     if(c === "winver" && prompt === scn.prompt) winver = true;   // only at the normal prompt, not inside diskpart
     if(r === "\f"){ out = ""; return; }
     out += prompt + raw.trim() + "\n" + (r ? r + "\n" : "") + "\n";
